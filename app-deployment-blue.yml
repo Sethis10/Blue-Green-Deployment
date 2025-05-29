@@ -19,13 +19,6 @@ spec:
         image: adijaiswal/bankapp:blue # Adjust the image tag for the blue version
         ports:
         - containerPort: 8080
-        env:
-        - name: SPRING_DATASOURCE_URL
-          value: jdbc:mysql://mysql-service:3306/bankappdb?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-        - name: SPRING_DATASOURCE_USERNAME
-          value: root
-        - name: SPRING_DATASOURCE_PASSWORD
-          value: Test@123
         resources:
           requests:
             memory: "500Mi"
