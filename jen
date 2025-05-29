@@ -1,0 +1,106 @@
+pipeline {
+    agent any
+    
+    parameters {
+        choice(name: 'DEPLOY_ENV', choices: ['blue', 'green'], description: 'Choose which environment to deploy')
+        choice(name: 'DOCKER_TAG', choices: ['blue', 'green'], description: 'Choose the Docker image tag for deployment')
+        booleanParam(name: 'SWITCH_TRAFFIC', defaultValue: false, description: 'Switch traffic between Blue and Green')
+    }
+    
+    tools {
+        maven 'maven3'
+    }
+    
+    environment {
+        IMAGE_NAME = "sagar608/bankapp"
+        TAG = "${params.DOCKER_TAG}"
+        KUBE_NAMESPACE = 'webapps'
+        SCANNER_HOME= tool 'sonar-scanner'
+    }
+
+    stages {
+        stage('Git-Checkout') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Sethis10/Blue-Green-Deployment.git'
+            }
+        }
+        
+        stage('Compile') {
+            steps {
+                sh "mvn compile"
+            }
+        }
+        
+        stage('Test') {
+            steps {
+                sh "mvn test -DskipTests=true"
+            }
+        }
+        
+        stage('Sonar-Analysis') {
+            steps {
+                withSonarQubeEnv('sonar') {
+                     sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=bluegreenapp -Dsonar.projectKey=bluegreenapp \
+                    -Dsonar.java.binaries=. '''
+                }
+            }
+        }
+        
+        stage('Build') {
+            steps {
+                sh "mvn package -DskipTests=true"
+            }
+        }
+        
+        stage('Docker image and tag') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker build -t ${IMAGE_NAME}:${TAG} ."
+                    }
+                }
+            }
+        }
+        
+        stage('Docker push') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker-cred', toolName: 'docker') {
+                        sh "docker push ${IMAGE_NAME}:${TAG}"
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy SVC-APP') {
+            steps {
+                withKubeCredentials(kubectlCredentials: [[caCertificate: '', clusterName: 'EKS-4', contextName: '', credentialsId: 'k8s-cred', namespace: 'webapps', serverUrl: 'https://85B9789D90F113F6B934EE1F5FB39833.yl4.ap-south-1.eks.amazonaws.com']]) {
+                    sh ''' if ! kubectl get svc bankapp-service -n ${KUBE_NAMESPACE}; then
+                            kubectl apply -f bankapp-service.yml -n ${KUBE_NAMESPACE}
+                        fi
+                    '''
+                }
+            }
+        }
+        
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    def deploymentFile = (params.DEPLOY_ENV == 'blue') ? 'app-deployment-blue.yml' : 'app-deployment-green.yml'
+
+                    withKubeConfig(
+                        caCertificate: '',
+                        clusterName: 'EKS-4',
+                        contextName: '',
+                        credentialsId: 'k8s-cred',
+                        namespace: 'webapps',
+                        restrictKubeConfigAccess: false,
+                        serverUrl: 'https://85B9789D90F113F6B934EE1F5FB39833.yl4.ap-south-1.eks.amazonaws.com'
+                    ) {
+                        sh "kubectl apply -f ${deploymentFile} -n ${KUBE_NAMESPACE}"
+                    }
+                }
+            }
+        }
+    }
+}
